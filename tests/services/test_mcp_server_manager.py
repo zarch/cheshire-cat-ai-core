@@ -168,6 +168,365 @@ class TestMCPServerManagerMetadata:
             MCPServerManager.plugin_id = original
 
 
+# ── Seed from CCAT_MCP_SERVERS env var ──────────────────────────────
+
+
+class TestMCPServerManagerSeed:
+    """Tests for the setup() seed mechanism (CCAT_MCP_SERVERS env var)."""
+
+    @pytest.mark.asyncio
+    async def test_seed_from_env_var(self, monkeypatch):
+        """setup() seeds servers from CCAT_MCP_SERVERS when DB is empty."""
+        manager = MCPServerManager()
+        manager.plugin_id = "core"
+
+        monkeypatch.setenv(
+            "CCAT_MCP_SERVERS",
+            '[{"name":"eudox-mcp","description":"Eudox","url":"http://eudox-mcp:8000/mcp"}]',
+        )
+
+        # Mock DB to simulate empty DB
+        seeded_data = {}
+        from cat.db import DB
+
+        async def mock_load(key):
+            return None  # empty DB
+
+        async def mock_save(key, value):
+            seeded_data[key] = value
+
+        monkeypatch.setattr(DB, "load", mock_load)
+        monkeypatch.setattr(DB, "save", mock_save)
+
+        await manager.setup()
+
+        db_key = manager._settings_db_key()
+        assert db_key in seeded_data
+        assert len(seeded_data[db_key]["servers"]) == 1
+        assert seeded_data[db_key]["servers"][0]["name"] == "eudox-mcp"
+
+    @pytest.mark.asyncio
+    async def test_seed_skipped_when_db_has_data(self, monkeypatch):
+        """setup() does NOT overwrite existing admin config."""
+        manager = MCPServerManager()
+        manager.plugin_id = "core"
+
+        monkeypatch.setenv(
+            "CCAT_MCP_SERVERS",
+            '[{"name":"env-server","description":"From env","url":"http://env:8000/mcp"}]',
+        )
+
+        from cat.db import DB
+
+        async def mock_load(key):
+            return {
+                "servers": [
+                    {
+                        "name": "admin-server",
+                        "description": "Admin",
+                        "url": "http://admin:8000/mcp",
+                    }
+                ]
+            }
+
+        saved = {}
+
+        async def mock_save(key, value):
+            saved[key] = value
+
+        monkeypatch.setattr(DB, "load", mock_load)
+        monkeypatch.setattr(DB, "save", mock_save)
+
+        await manager.setup()
+
+        # Should NOT have saved — admin config preserved
+        assert manager._settings_db_key() not in saved
+
+    @pytest.mark.asyncio
+    async def test_seed_skipped_when_no_env_var(self, monkeypatch):
+        """setup() is a no-op when CCAT_MCP_SERVERS is not set."""
+        manager = MCPServerManager()
+        manager.plugin_id = "core"
+
+        monkeypatch.delenv("CCAT_MCP_SERVERS", raising=False)
+
+        from cat.db import DB
+
+        saved = {}
+
+        async def mock_save(key, value):
+            saved[key] = value
+
+        monkeypatch.setattr(DB, "save", mock_save)
+
+        await manager.setup()
+
+        assert manager._settings_db_key() not in saved
+
+    @pytest.mark.asyncio
+    async def test_seed_invalid_json_logged_and_skipped(self, monkeypatch):
+        """setup() logs error and does not crash on invalid JSON."""
+        manager = MCPServerManager()
+        manager.plugin_id = "core"
+
+        monkeypatch.setenv("CCAT_MCP_SERVERS", "not-json-at-all")
+
+        from cat.db import DB
+
+        saved = {}
+
+        async def mock_load(key):
+            return None
+
+        async def mock_save(key, value):
+            saved[key] = value
+
+        monkeypatch.setattr(DB, "load", mock_load)
+        monkeypatch.setattr(DB, "save", mock_save)
+
+        # Should not raise
+        await manager.setup()
+
+        assert manager._settings_db_key() not in saved
+
+    @pytest.mark.asyncio
+    async def test_seed_not_array_logged_and_skipped(self, monkeypatch):
+        """setup() rejects a non-array JSON value."""
+        manager = MCPServerManager()
+        manager.plugin_id = "core"
+
+        monkeypatch.setenv("CCAT_MCP_SERVERS", '{"name":"wrong"}')
+
+        from cat.db import DB
+
+        saved = {}
+
+        async def mock_load(key):
+            return None
+
+        async def mock_save(key, value):
+            saved[key] = value
+
+        monkeypatch.setattr(DB, "load", mock_load)
+        monkeypatch.setattr(DB, "save", mock_save)
+
+        await manager.setup()
+
+        assert manager._settings_db_key() not in saved
+
+    @pytest.mark.asyncio
+    async def test_seed_invalid_server_in_array_logged_and_skipped(self, monkeypatch):
+        """setup() rejects an array with invalid server objects."""
+        manager = MCPServerManager()
+        manager.plugin_id = "core"
+
+        monkeypatch.setenv(
+            "CCAT_MCP_SERVERS",
+            '[{"name":"ok","description":"OK","url":"http://ok:8000/mcp"},'
+            '{"name":"bad","url":"not-a-url"}]',
+        )
+
+        from cat.db import DB
+
+        saved = {}
+
+        async def mock_load(key):
+            return None
+
+        async def mock_save(key, value):
+            saved[key] = value
+
+        monkeypatch.setattr(DB, "load", mock_load)
+        monkeypatch.setattr(DB, "save", mock_save)
+
+        await manager.setup()
+
+        # Entire batch fails validation — nothing saved
+        assert manager._settings_db_key() not in saved
+
+    @pytest.mark.asyncio
+    async def test_seed_multiple_servers(self, monkeypatch):
+        """setup() seeds multiple servers from env var."""
+        manager = MCPServerManager()
+        manager.plugin_id = "core"
+
+        monkeypatch.setenv(
+            "CCAT_MCP_SERVERS",
+            '[{"name":"s1","description":"Server 1","url":"http://s1:8000/mcp"},'
+            '{"name":"s2","description":"Server 2","url":"http://s2:8001/mcp","auth_type":"apikey"}]',
+        )
+
+        from cat.db import DB
+
+        seeded_data = {}
+
+        async def mock_load(key):
+            return None
+
+        async def mock_save(key, value):
+            seeded_data[key] = value
+
+        monkeypatch.setattr(DB, "load", mock_load)
+        monkeypatch.setattr(DB, "save", mock_save)
+
+        await manager.setup()
+
+        db_key = manager._settings_db_key()
+        assert len(seeded_data[db_key]["servers"]) == 2
+        assert seeded_data[db_key]["servers"][0]["name"] == "s1"
+        assert seeded_data[db_key]["servers"][1]["auth_type"] == "apikey"
+
+    @pytest.mark.asyncio
+    async def test_seed_empty_array_skipped(self, monkeypatch):
+        """setup() skips CCAT_MCP_SERVERS=[] — nothing to seed."""
+        manager = MCPServerManager()
+        manager.plugin_id = "core"
+
+        monkeypatch.setenv("CCAT_MCP_SERVERS", "[]")
+
+        from cat.db import DB
+
+        saved = {}
+
+        async def mock_load(key):
+            return None
+
+        async def mock_save(key, value):
+            saved[key] = value
+
+        monkeypatch.setattr(DB, "load", mock_load)
+        monkeypatch.setattr(DB, "save", mock_save)
+
+        await manager.setup()
+
+        # Empty array should NOT be written to DB
+        assert manager._settings_db_key() not in saved
+
+    @pytest.mark.asyncio
+    async def test_seed_empty_string_skipped(self, monkeypatch):
+        """setup() skips CCAT_MCP_SERVERS="" — falsy value."""
+        manager = MCPServerManager()
+        manager.plugin_id = "core"
+
+        monkeypatch.setenv("CCAT_MCP_SERVERS", "")
+
+        from cat.db import DB
+
+        saved = {}
+
+        async def mock_save(key, value):
+            saved[key] = value
+
+        monkeypatch.setattr(DB, "save", mock_save)
+
+        await manager.setup()
+
+        assert manager._settings_db_key() not in saved
+
+    @pytest.mark.asyncio
+    async def test_seed_db_load_fails_gracefully(self, monkeypatch):
+        """setup() does not crash when DB.load() raises."""
+        manager = MCPServerManager()
+        manager.plugin_id = "core"
+
+        monkeypatch.setenv(
+            "CCAT_MCP_SERVERS",
+            '[{"name":"ok","description":"OK","url":"http://ok:8000/mcp"}]',
+        )
+
+        from cat.db import DB
+
+        saved = {}
+
+        async def mock_load(key):
+            raise ConnectionError("DB unavailable")
+
+        async def mock_save(key, value):
+            saved[key] = value
+
+        monkeypatch.setattr(DB, "load", mock_load)
+        monkeypatch.setattr(DB, "save", mock_save)
+
+        # Should not raise
+        await manager.setup()
+
+        # Nothing saved — seed aborted due to DB error
+        assert manager._settings_db_key() not in saved
+
+    @pytest.mark.asyncio
+    async def test_seed_then_reboot_skips(self, monkeypatch):
+        """First boot seeds, second boot sees DB data and skips.
+
+        Simulates the two-boot sequence: env var seeds on first boot,
+        then on reboot the DB already has data so env var is ignored.
+        """
+        from cat.db import DB
+
+        manager = MCPServerManager()
+        manager.plugin_id = "core"
+
+        monkeypatch.setenv(
+            "CCAT_MCP_SERVERS",
+            '[{"name":"seeded","description":"From env","url":"http://seeded:8000/mcp"}]',
+        )
+
+        # --- First boot: DB is empty ---
+        db = {}
+        saved_count = 0
+
+        async def mock_load_empty(key):
+            return None
+
+        async def mock_save(key, value):
+            nonlocal saved_count
+            saved_count += 1
+            db[key] = value
+
+        monkeypatch.setattr(DB, "load", mock_load_empty)
+        monkeypatch.setattr(DB, "save", mock_save)
+
+        await manager.setup()
+
+        assert saved_count == 1
+        assert len(db[manager._settings_db_key()]["servers"]) == 1
+
+        # --- Second boot: DB has data ---
+        async def mock_load_seeded(key):
+            return db.get(key)
+
+        monkeypatch.setattr(DB, "load", mock_load_seeded)
+
+        await manager.setup()
+
+        # Should NOT save again — DB already has data
+        assert saved_count == 1
+
+    @pytest.mark.asyncio
+    async def test_seed_db_save_fails_gracefully(self, monkeypatch):
+        """setup() logs error when DB.save() fails but does not crash."""
+        manager = MCPServerManager()
+        manager.plugin_id = "core"
+
+        monkeypatch.setenv(
+            "CCAT_MCP_SERVERS",
+            '[{"name":"ok","description":"OK","url":"http://ok:8000/mcp"}]',
+        )
+
+        from cat.db import DB
+
+        async def mock_load(key):
+            return None
+
+        async def mock_save(key, value):
+            raise ConnectionError("DB write failed")
+
+        monkeypatch.setattr(DB, "load", mock_load)
+        monkeypatch.setattr(DB, "save", mock_save)
+
+        # Should not raise — error caught by the outer try/except
+        await manager.setup()
+
+
 # ── Integration with the running app ────────────────────────────────
 
 

@@ -2,12 +2,13 @@ import os
 
 # TODOV2: get rid of this stuff and just ensure default values from main.py
 
+
 def get_supported_env_variables():
 
     return {
         "CCAT_URL": "http://localhost:1865",
-        "CCAT_SQL": "sqlite:///data/core/core.db", # TODOV2: db could be encrypted by default # postgresql+asyncpg://user:password@localhost/dbname
-        "CCAT_API_KEY": None, # TODOV2: not sure about the None default
+        "CCAT_SQL": "sqlite:///data/core/core.db",  # TODOV2: db could be encrypted by default # postgresql+asyncpg://user:password@localhost/dbname
+        "CCAT_API_KEY": None,  # TODOV2: not sure about the None default
         "CCAT_JWT_SECRET": "meow_jwt",
         "CCAT_JWT_EXPIRE_MINUTES": str(60 * 24),  # JWT expires after 1 day
         "CCAT_DEBUG": "true",
@@ -17,11 +18,14 @@ def get_supported_env_variables():
         "CCAT_CORS_ENABLED": "true",
         "CCAT_CORS_ALLOWED_ORIGINS": "*",
         "CCAT_TELEMETRY": "true",
-        "CCAT_PREINSTALLED_PLUGINS": ",".join([
-            "https://github.com/cheshire-cat-ai/llms",
-            "https://github.com/cheshire-cat-ai/ui",
-            #"https://github.com/cheshire-cat-ai/uploads",
-        ]),
+        "CCAT_MCP_SERVERS": None,  # JSON array of MCP server configs, e.g. [{"name":"my-server","description":"...","url":"http://..."}]
+        "CCAT_PREINSTALLED_PLUGINS": ",".join(
+            [
+                "https://github.com/cheshire-cat-ai/llms",
+                "https://github.com/cheshire-cat-ai/ui",
+                # "https://github.com/cheshire-cat-ai/uploads",
+            ]
+        ),
     }
 
 
