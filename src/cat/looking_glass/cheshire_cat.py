@@ -88,12 +88,13 @@ class CheshireCat:
         from cat.services.agents.default import DefaultAgent
         from cat.services.model_providers.default import DefaultModelProvider
         from cat.services.core_settings import CoreSettings
+        from cat.services.mcp_servers import MCPServerManager
 
         # Reset factory (shutdown existing services and clear registry)
         await self.factory.teardown()
 
         # Register default services
-        for ServiceClass in [CoreSettings, DefaultAuth, DefaultModelProvider, DefaultAgent]:
+        for ServiceClass in [CoreSettings, MCPServerManager, DefaultAuth, DefaultModelProvider, DefaultAgent]:
             ServiceClass.plugin_id = "core"
             self.factory.register(ServiceClass)
 
