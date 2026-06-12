@@ -1,4 +1,7 @@
+from contextlib import asynccontextmanager
+
 from cachetools import TTLCache
+from cat import log
 from fastmcp import FastMCP, Client
 
 
@@ -8,7 +11,7 @@ empty_server = FastMCP("EmptyServer")
 
 class MCPClient(Client):
     """Cat MCP client is scoped by user_id and does not keep a live connection to servers.
-        We use caches waiting for the protocol to become stateless.
+    We use caches waiting for the protocol to become stateless.
     """
 
     def __init__(self, config):
@@ -21,45 +24,53 @@ class MCPClient(Client):
             super().__init__(config)
 
 
-class MCPClients():
+class MCPClients:
     """Keep a cache of user scoped MCP clients"""
 
     def __init__(self):
-        self.clients = TTLCache(maxsize=1000, ttl=60*10)
-    
-    def get_user_client(self, agent) -> MCPClient:
-        
-        need_new, config = self.need_new_client(agent)
+        self.clients = TTLCache(maxsize=1000, ttl=60 * 10)
+
+    @asynccontextmanager
+    async def get_user_client(self, agent):
+        """Return an MCP client scoped to the user, resolving server config
+        from MCPServerManager (Tier 1 system-wide servers).
+
+        The async context manager opens and closes the client connection,
+        preserving the existing call site in base.py unchanged.
+        """
+
+        need_new, config = await self.need_new_client(agent)
         if need_new:
             self.clients[agent.user.id] = MCPClient(config)
 
-        return self.clients[agent.user.id]
-    
-    def need_new_client(self, agent) -> tuple[bool, dict]:
-        
-        config = {
-            "mcpServers": {}
-        }
+        client = self.clients[agent.user.id]
+        async with client as mcp_client:
+            yield mcp_client
 
-        for slug, server_config in {}: # TODOV2 RECOVER
-            config["mcpServers"][slug] = {
-                "url": str(server_config.url)
-            }
-        for server_config in []: # TODOV2 RECOVER
-            config["mcpServers"][server_config.name] = {
-                "url": str(server_config.url)
-            }
-        
-        need_new = (agent.user.id not in self.clients) \
-            or self.clients[agent.user.id].config != config
+    async def need_new_client(self, agent) -> tuple[bool, dict]:
+        """Resolve MCP server config from MCPServerManager and detect
+        if the cached client is stale."""
 
-        return (
-            need_new,
-            config
-        )
-        
+        config = {"mcpServers": {}}
 
-    
-        
+        # Tier 1: system-wide MCP servers (admin-configured via MCPServerManager)
+        try:
+            mcp_manager = await agent.ccat.get(
+                "mcp_servers", "system", raise_error=False
+            )
+            if mcp_manager:
+                settings = await mcp_manager.load_settings()
+                if settings:
+                    for server in settings.servers:
+                        config["mcpServers"][server.name] = {"url": str(server.url)}
+        except Exception as e:
+            log.error(f"Error loading MCP server settings: {e}")
 
-    
+        # TODOV2: Tier 2 — profile MCPs (per-role, see 07-profile-mcp-access.md)
+        # TODOV2: Tier 3 — user preferences (enable/disable, see 07-profile-mcp-access.md)
+
+        need_new = (agent.user.id not in self.clients) or self.clients[
+            agent.user.id
+        ].config != config
+
+        return need_new, config
